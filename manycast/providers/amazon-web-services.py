@@ -13,7 +13,9 @@ class DNS:
         )
         self._zone_name = zone_name
 
-        for zone_page in self._client.get_paginator('list_hosted_zones').paginate():
+        for zone_page in self._client.get_paginator(
+            'list_hosted_zones'
+        ).paginate():
             for zone in zone_page['HostedZones']:
                 if zone['Name'] == self._zone_name:
                     self._zone = zone['Id']
@@ -47,13 +49,18 @@ class DNS:
             }
         )
 
+    def nameservers(self):
+        return []
+
     def list(self):
         Record = collections.namedtuple(
             'Record',
             ['name', 'type', 'ttl', 'values']
         )
 
-        for record_page in self._client.get_paginator('list_resource_record_sets').paginate(
+        for record_page in self._client.get_paginator(
+            'list_resource_record_sets'
+        ).paginate(
             HostedZoneId=self._zone
         ):
             for record in record_page['ResourceRecordSets']:

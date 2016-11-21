@@ -5,11 +5,13 @@ import configparser
 import imp
 import ipaddress
 import os
+import socket
 import sys
+
+import dns.resolver
 
 from manycast import validate
 from manycast import rdns
-
 
 
 # Check config
@@ -40,19 +42,19 @@ parse_provision.add_argument(
     help='eg: whatbox.ca, 192.131.44.0/24,  2620:B8:4000::/48 ',
     metavar="ZONE"
 )
-
 parse_provision.add_argument(
     'sync_from',
     choices=config.sections(),
     help='Name of cloud to copy records from',
-    metavar="SYNC_FROM"
+    metavar="PROVIDER"
 )
 parse_provision.add_argument(
     'sync_to',
     choices=config.sections(),
     help='Name of cloud to copy records to',
-    metavar="SYNC_TO"
+    metavar="PROVIDER"
 )
+
 parse_upsert = subparsers.add_parser('upsert')
 parse_upsert.add_argument(
     'zone',
@@ -68,7 +70,7 @@ parse_upsert.add_argument(
 parse_upsert.add_argument(
     'type',
     type=str,
-    choices=['A', 'AAAA', 'NS', 'MX', 'SOA', 'TXT', 'CNAME'],
+    choices=validate.SUPPORTED_TYPES,
     help='eg: A, AAAA, TXT, CNAME',
     metavar="TYPE"
 )
@@ -84,6 +86,7 @@ parse_upsert.add_argument(
     nargs='+',
     metavar="VALUE"
 )
+
 parse_delete = subparsers.add_parser('delete')
 parse_delete.add_argument(
     'zone',
@@ -99,7 +102,7 @@ parse_delete.add_argument(
 parse_delete.add_argument(
     'type',
     type=str,
-    choices=['A', 'AAAA', 'NS', 'MX', 'SOA', 'TXT', 'CNAME'],
+    choices=validate.SUPPORTED_TYPES,
     help='eg: A, AAAA, TXT, CNAME',
     metavar="TYPE"
 )
@@ -115,6 +118,30 @@ parse_delete.add_argument(
     nargs='+',
     metavar="VALUE"
 )
+
+parse_provider_test = subparsers.add_parser(
+    'provider-test',
+    description="""Test that a provider is working properly"""
+)
+parse_provider_test.add_argument(
+    'zone',
+    help='eg: whatbox.ca, 192.131.44.0/24,  2620:B8:4000::/48 ',
+    metavar="ZONE"
+)
+parse_provider_test.add_argument(
+    'provider',
+    choices=config.sections(),
+    help='Name of cloud to copy records from',
+    metavar="PROVIDER"
+)
+parse_provider_test.add_argument(
+    'nameservers',
+    type=str,
+    nargs='+',
+    metavar="NAMESERVER"
+)
+
+
 args = parser.parse_args()
 
 
@@ -145,6 +172,8 @@ if args.command == 'delete':
     for provider_name, provider in providers.items():
         if rdns.is_ip(args.name):
             name = rdns.ip_to_arpa(args.name)
+        elif rdns.is_cidr(args.name):
+            name = rdns.cidr_to_arpa(args.name)
         else:
             name = args.name + '.'
 
@@ -166,6 +195,8 @@ elif args.command == 'upsert':
     for provider_name, provider in providers.items():
         if rdns.is_ip(args.name):
             name = rdns.ip_to_arpa(args.name)
+        elif rdns.is_cidr(args.name):
+            name = rdns.cidr_to_arpa(args.name)
         else:
             name = args.name + '.'
 
@@ -184,15 +215,6 @@ elif args.command == 'upsert':
         )
 
 elif args.command == 'provision':
-    def record_in_list(record, list):
-        for entry in list:
-            if entry.name != record.name:
-                continue
-            if entry.type != record.type:
-                continue
-            if entry.ttl != record.ttl:
-                continue
-
     for entry in providers[args.sync_from].list():
         if entry.type in ['SOA', 'NS']:
             continue
@@ -201,3 +223,17 @@ elif args.command == 'provision':
         providers[args.sync_to].upsert(*entry)
 
     print("NS and SOA records remain untouched")
+
+elif args.command == 'provider-test':
+    for ns in args.nameservers:
+        dns_client = dns.resolver.Resolver(configure=False)
+        dns_client.nameservers = [socket.gethostbyname(ns)]
+
+        for entry in providers[args.provider].list():
+            try:
+                answer = dns_client.query(entry.name)
+                # print(str(answer.rrset))
+            except dns.resolver.NoAnswer:
+                print("%s NOANSWER %s" % (ns, entry.name))
+            except dns.resolver.NXDOMAIN:
+                print("%s NXDOMAIN %s" % (ns, entry.name))

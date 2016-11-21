@@ -1,4 +1,5 @@
 import collections
+import time
 # import typing
 
 from google.cloud.dns import Client
@@ -33,12 +34,18 @@ class DNS:
 
         changes.add_record_set(record)
         changes.create()
+        while changes.status != 'done':
+            time.sleep(1)     # or whatever interval is appropriate
+            changes.reload()   # API request
 
     def delete(self, name: str, type: str, ttl: int, values):
         record = self._client.resource_record_set(name, type, ttl, values)
         changes = self._client.changes()
         changes.delete_record_set(record)
         changes.create()
+        while changes.status != 'done':
+            time.sleep(1)     # or whatever interval is appropriate
+            changes.reload()   # API request
 
     def list(self):
         Record = collections.namedtuple(
@@ -53,3 +60,6 @@ class DNS:
                 ttl=record.ttl,
                 values=record.rrdatas
             )
+
+    def nameservers(self):
+        return self._client.name_servers

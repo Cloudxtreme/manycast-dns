@@ -42,7 +42,7 @@ def is_ip(ip_address):
 
 
 def ip_to_arpa(ip_address):
-    return bp_ip_address(ip_address).reverse_pointer
+    return bp_ip_address(ip_address).reverse_pointer + '.'
 
 
 def is_cidr(cidr):
@@ -50,6 +50,7 @@ def is_cidr(cidr):
         return False
 
     # TODO: check modulo, check format
+    return True
 
 
 def cidr_to_arpa(cidr):
@@ -74,4 +75,4 @@ def cidr_to_arpa(cidr):
                 raise ValueErrror('Unexpected non-zero when removing nibbles')
             zone = zone[4:]
 
-    return zone
+    return zone + '.'
