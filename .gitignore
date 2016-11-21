@@ -1,0 +1,4 @@
+*.pyc
+
+config/config.ini
+config/google-cloud-credentials.json

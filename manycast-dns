@@ -1,0 +1,203 @@
+#!/bin/env python3
+
+import argparse
+import configparser
+import imp
+import ipaddress
+import os
+import sys
+
+from manycast import validate
+from manycast import rdns
+
+
+
+# Check config
+if not os.path.exists('config/config.ini'):
+    sys.exit('Could not find config/config.ini')
+
+config = configparser.ConfigParser()
+config.read('config/config.ini')
+
+
+# Argparse
+parser = argparse.ArgumentParser()
+subparsers = parser.add_subparsers(
+    title='Commands',
+    dest='command'
+)
+parse_provision = subparsers.add_parser(
+    'provision',
+    description="""Populate a new DNS provider with records from another.
+
+    Note: This does not currently create the zones themselves within the
+    provider, when provisioning a new provider you are responsible for creating
+    the zones initially by hand.
+    """
+)
+parse_provision.add_argument(
+    'zone',
+    help='eg: whatbox.ca, 192.131.44.0/24,  2620:B8:4000::/48 ',
+    metavar="ZONE"
+)
+
+parse_provision.add_argument(
+    'sync_from',
+    choices=config.sections(),
+    help='Name of cloud to copy records from',
+    metavar="SYNC_FROM"
+)
+parse_provision.add_argument(
+    'sync_to',
+    choices=config.sections(),
+    help='Name of cloud to copy records to',
+    metavar="SYNC_TO"
+)
+parse_upsert = subparsers.add_parser('upsert')
+parse_upsert.add_argument(
+    'zone',
+    help='eg: whatbox.ca, 192.131.44.0/24,  2620:B8:4000::/48 ',
+    metavar="ZONE"
+)
+parse_upsert.add_argument(
+    'name',
+    type=str,
+    help='eg: bacon.whatbox.ca',
+    metavar="NAME"
+)
+parse_upsert.add_argument(
+    'type',
+    type=str,
+    choices=['A', 'AAAA', 'NS', 'MX', 'SOA', 'TXT', 'CNAME'],
+    help='eg: A, AAAA, TXT, CNAME',
+    metavar="TYPE"
+)
+parse_upsert.add_argument(
+    'ttl',
+    type=int,
+    help='Specified in seconds. eg: 300',
+    metavar="TTL"
+)
+parse_upsert.add_argument(
+    'values',
+    type=str,
+    nargs='+',
+    metavar="VALUE"
+)
+parse_delete = subparsers.add_parser('delete')
+parse_delete.add_argument(
+    'zone',
+    help='eg: whatbox.ca, 192.131.44.0/24,  2620:B8:4000::/48 ',
+    metavar="ZONE"
+)
+parse_delete.add_argument(
+    'name',
+    type=str,
+    help='eg: bacon.whatbox.ca',
+    metavar="NAME"
+)
+parse_delete.add_argument(
+    'type',
+    type=str,
+    choices=['A', 'AAAA', 'NS', 'MX', 'SOA', 'TXT', 'CNAME'],
+    help='eg: A, AAAA, TXT, CNAME',
+    metavar="TYPE"
+)
+parse_delete.add_argument(
+    'ttl',
+    type=int,
+    help='Specified in seconds. eg: 300',
+    metavar="TTL"
+)
+parse_delete.add_argument(
+    'values',
+    type=str,
+    nargs='+',
+    metavar="VALUE"
+)
+args = parser.parse_args()
+
+
+# Zone handling
+if rdns.is_ip(args.zone):
+    zone = rdns.ip_to_arpa(args.zone)
+elif rdns.is_cidr(args.zone):
+    zone = rdns.cidr_to_arpa(args.zone)
+else:
+    zone = args.zone + '.'
+
+# Dynamically load providers
+providers = {}
+for provider_name in config.sections():
+    provider_module = imp.load_source(
+        'providers.%s' % provider_name,
+        './manycast/providers/%s.py' % provider_name
+    )
+
+    providers[provider_name] = provider_module.DNS(
+        config[provider_name],
+        zone
+    )
+
+
+# Do work
+if args.command == 'delete':
+    for provider_name, provider in providers.items():
+        if rdns.is_ip(args.name):
+            name = rdns.ip_to_arpa(args.name)
+        else:
+            name = args.name + '.'
+
+        validate.validate(
+            name=name,
+            type=args.type,
+            ttl=args.ttl,
+            values=args.values
+        )
+
+        provider.delete(
+            name=name,
+            type=args.type,
+            ttl=args.ttl,
+            values=args.values
+        )
+
+elif args.command == 'upsert':
+    for provider_name, provider in providers.items():
+        if rdns.is_ip(args.name):
+            name = rdns.ip_to_arpa(args.name)
+        else:
+            name = args.name + '.'
+
+        validate.validate(
+            name=name,
+            type=args.type,
+            ttl=args.ttl,
+            values=args.values
+        )
+
+        provider.upsert(
+            name=name,
+            type=args.type,
+            ttl=args.ttl,
+            values=args.values
+        )
+
+elif args.command == 'provision':
+    def record_in_list(record, list):
+        for entry in list:
+            if entry.name != record.name:
+                continue
+            if entry.type != record.type:
+                continue
+            if entry.ttl != record.ttl:
+                continue
+
+    for entry in providers[args.sync_from].list():
+        if entry.type in ['SOA', 'NS']:
+            continue
+        print(entry)
+        validate.validate(*entry)
+        providers[args.sync_to].upsert(*entry)
+
+    print("NS and SOA records remain untouched")
